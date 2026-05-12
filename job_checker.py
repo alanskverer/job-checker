@@ -19,22 +19,38 @@ RECIPIENT_EMAIL = "alanskverer@gmail.com"
 SENDER_EMAIL = os.environ.get("GMAIL_ADDRESS", "alanskverer@gmail.com")
 GMAIL_APP_PASSWORD = os.environ.get("GMAIL_APP_PASSWORD", "")
 
-KEYWORDS = [
+# A job matches if its title contains any DOMAIN word AND any ROLE word.
+# This catches "Supply Chain Analyst", "BI Planner", "Data Specialist", etc.
+# while blocking unrelated roles like "Salesforce Analyst" or "HR Manager".
+DOMAIN_KEYWORDS = [
     "supply chain",
     "business intelligence",
-    "bi analyst",
-    "data analyst",
-    "planning analyst",
-    "analytics specialist",
-    "operations analyst",
-    "demand planning",
+    "bi",
+    "data",
+    "analytics",
+    "analytical",
+    "operations",
+    "demand",
+    "planning",
+    "inventory",
+    "logistics",
+    "forecasting",
     "sql",
     "tableau",
-    "business analyst",
+]
+
+ROLE_KEYWORDS = [
+    "analyst",
+    "planner",
+    "specialist",
+    "engineer",
+    "manager",
+    "developer",
+    "scientist",
 ]
 
 # Search terms passed to each company's search engine
-SEARCH_QUERY = "supply chain analytics business intelligence SQL Tableau planning"
+SEARCH_QUERY = "supply chain analytics business intelligence SQL Tableau planning inventory logistics forecasting"
 
 BROWSER_HEADERS = {
     "User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
@@ -60,7 +76,10 @@ def save_seen_jobs(seen: set) -> None:
 
 
 def is_relevant(title: str) -> bool:
-    return any(kw in title.lower() for kw in KEYWORDS)
+    t = title.lower()
+    has_domain = any(kw in t for kw in DOMAIN_KEYWORDS)
+    has_role = any(kw in t for kw in ROLE_KEYWORDS)
+    return has_domain and has_role
 
 
 def is_in_israel(location: str) -> bool:
@@ -88,6 +107,11 @@ def fetch_workday_jobs(tenant: str, instance: str, board: str, company_key: str)
         "SQL",
         "tableau",
         "planning",
+        "inventory",
+        "logistics",
+        "forecasting",
+        "data analyst",
+        "operations",
     ]
 
     for term in search_terms:
