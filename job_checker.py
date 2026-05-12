@@ -19,35 +19,43 @@ RECIPIENT_EMAIL = "alanskverer@gmail.com"
 SENDER_EMAIL = os.environ.get("GMAIL_ADDRESS", "alanskverer@gmail.com")
 GMAIL_APP_PASSWORD = os.environ.get("GMAIL_APP_PASSWORD", "")
 
-# A job matches if its title contains any DOMAIN word AND any ROLE word.
-# This catches "Supply Chain Analyst", "BI Planner", "Data Specialist", etc.
-# while blocking unrelated roles like "Salesforce Analyst" or "HR Manager".
-DOMAIN_KEYWORDS = [
+# Exact phrases — if ANY appear in the title, the job is relevant
+EXACT_MATCH = [
     "supply chain",
     "business intelligence",
-    "bi",
-    "data",
-    "analytics",
-    "analytical",
-    "operations",
-    "demand",
-    "planning",
-    "inventory",
-    "logistics",
-    "forecasting",
-    "sql",
+    "demand planning",
+    "demand forecast",
+    "inventory planning",
+    "inventory management",
+    "logistics planning",
+    "procurement planning",
+    "operations analyst",
+    "operations planning",
+    "s&op",
+    "sales and operations",
+    "data analyst",
+    "data analytics",
     "tableau",
+    "bi analyst",
+    "bi developer",
+    "bi engineer",
+    "bi manager",
+    "analytics developer",
+    "analytics engineer",
 ]
 
-ROLE_KEYWORDS = [
-    "analyst",
-    "planner",
-    "specialist",
-    "engineer",
-    "manager",
-    "developer",
-    "scientist",
+# Short keywords matched as whole words only (avoids "bi" inside "reliability", etc.)
+WORD_BOUNDARY_TERMS = ["bi", "sql"]
+
+# Domain + role AND-match — both must appear for a hit
+# Intentionally excludes "data" / "operations" alone (too broad)
+DOMAIN_KEYWORDS = [
+    "analytics", "analytical", "planning", "inventory",
+    "logistics", "forecasting", "procurement", "sourcing",
 ]
+
+# Tight role list — no "engineer", "developer", "scientist" (catches too many software/infra roles)
+ROLE_KEYWORDS = ["analyst", "planner", "specialist", "manager"]
 
 # Search terms passed to each company's search engine
 SEARCH_QUERY = "supply chain analytics business intelligence SQL Tableau planning inventory logistics forecasting"
@@ -77,9 +85,15 @@ def save_seen_jobs(seen: set) -> None:
 
 def is_relevant(title: str) -> bool:
     t = title.lower()
-    has_domain = any(kw in t for kw in DOMAIN_KEYWORDS)
-    has_role = any(kw in t for kw in ROLE_KEYWORDS)
-    return has_domain and has_role
+    # Tier 1: exact phrase match
+    if any(phrase in t for phrase in EXACT_MATCH):
+        return True
+    # Tier 2: whole-word short keyword + role (including developer/engineer for BI/SQL titles)
+    if any(re.search(r'\b' + kw + r'\b', t) for kw in WORD_BOUNDARY_TERMS):
+        if any(role in t for role in ROLE_KEYWORDS + ["developer", "engineer"]):
+            return True
+    # Tier 3: domain word + role word both present
+    return any(kw in t for kw in DOMAIN_KEYWORDS) and any(kw in t for kw in ROLE_KEYWORDS)
 
 
 def is_in_israel(location: str) -> bool:
