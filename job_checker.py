@@ -128,41 +128,53 @@ def fetch_kla_jobs() -> list[dict]:
 
 
 # ---------------------------------------------------------------------------
-# Intel scraper (Phenom People ATS)
+# Intel scraper — HTML scrape (Phenom People blocks direct API calls)
 # ---------------------------------------------------------------------------
 
 def fetch_intel_jobs() -> list[dict]:
-    # Intel uses Phenom People ATS — POST-based JSON API
-    url = "https://jobs.intel.com/api/apply/v2/jobs"
+    import re
+    # Scrape Intel's jobs search page and extract embedded JSON
+    url = "https://jobs.intel.com/en/search-jobs/Israel/599/1"
     headers = {
-        "Content-Type": "application/json",
-        "Accept": "application/json",
-        "User-Agent": "Mozilla/5.0 (compatible; job-checker/1.0)",
-    }
-    payload = {
-        "limit": 20,
-        "offset": 0,
-        "searchText": "",
-        "locations": ["Israel"],
-        "domain": "intel.com",
+        "User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
+                      "(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+        "Accept-Language": "en-US,en;q=0.9",
     }
     jobs = []
 
     try:
-        resp = requests.post(url, json=payload, headers=headers, timeout=15)
+        resp = requests.get(url, headers=headers, timeout=15)
         resp.raise_for_status()
-        data = resp.json()
     except Exception as e:
         print(f"[intel] Request failed: {e}")
         return jobs
 
-    for job in data.get("positions", []) or data.get("jobPostings", []):
+    # Intel embeds job data as JSON inside a <script> tag
+    matches = re.findall(r'phApp\.ddo\s*=\s*(\{.*?\});\s*phApp\.ddo', resp.text, re.DOTALL)
+    if not matches:
+        # Fallback: look for jobs in the HTML as structured data
+        matches = re.findall(r'"eagerLoadRefineSearch"\s*:\s*(\{.*?\})\s*,\s*"', resp.text, re.DOTALL)
+
+    if not matches:
+        print("[intel] Could not parse job data from page")
+        return jobs
+
+    try:
+        data = json.loads(matches[0])
+        job_list = (data.get("eagerLoadRefineSearch", {})
+                        .get("data", {})
+                        .get("jobs", []))
+    except Exception:
+        job_list = []
+
+    for job in job_list:
         title = job.get("title", "")
-        location = job.get("location", "") or job.get("locationsText", "")
-        job_id = str(job.get("jobId", "") or job.get("id", ""))
+        location = job.get("city", "") + ", " + job.get("country", "")
+        job_id = str(job.get("jobId", ""))
         job_url = f"https://jobs.intel.com/en/detail/job/{job_id}"
 
-        if is_in_israel(location, "intel") and is_relevant(title):
+        if is_relevant(title):
             jobs.append({
                 "id": f"intel_{job_id}",
                 "title": title,
@@ -175,22 +187,22 @@ def fetch_intel_jobs() -> list[dict]:
 
 
 # ---------------------------------------------------------------------------
-# Google scraper
+# Google scraper — HTML scrape with structured data extraction
 # ---------------------------------------------------------------------------
 
 def fetch_google_jobs() -> list[dict]:
-    # Google Careers uses an internal search API; location must be the full region string
-    url = "https://careers.google.com/api/v3/search/"
+    import re
+    # Scrape Google Careers search page — API requires internal tokens
+    url = "https://careers.google.com/jobs/results/"
     params = {
-        "location": "Tel Aviv, Israel",
+        "location": "Israel",
         "q": "supply chain analytics SQL Tableau business intelligence",
-        "page_size": 20,
-        "page": 1,
-        "hl": "en_US",
     }
     headers = {
-        "User-Agent": "Mozilla/5.0 (compatible; job-checker/1.0)",
-        "Accept": "application/json",
+        "User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
+                      "(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+        "Accept-Language": "en-US,en;q=0.9",
         "Referer": "https://careers.google.com/",
     }
     jobs = []
@@ -198,26 +210,41 @@ def fetch_google_jobs() -> list[dict]:
     try:
         resp = requests.get(url, params=params, headers=headers, timeout=15)
         resp.raise_for_status()
-        data = resp.json()
     except Exception as e:
         print(f"[google] Request failed: {e}")
         return jobs
 
-    for job in data.get("jobs", []):
-        title = job.get("title", "")
-        locations = job.get("locations", [])
-        location_str = ", ".join(loc.get("display", "") for loc in locations)
-        job_id = str(job.get("id", ""))
-        job_url = f"https://careers.google.com/jobs/results/{job_id}"
+    # Google embeds job data as JSON-LD in <script type="application/ld+json">
+    matches = re.findall(
+        r'<script type="application/ld\+json">(.*?)</script>', resp.text, re.DOTALL
+    )
+    for raw in matches:
+        try:
+            data = json.loads(raw)
+        except Exception:
+            continue
 
-        if is_in_israel(location_str, "google") and is_relevant(title):
-            jobs.append({
-                "id": f"google_{job_id}",
-                "title": title,
-                "company": "Google",
-                "location": location_str,
-                "url": job_url,
-            })
+        items = data if isinstance(data, list) else [data]
+        for item in items:
+            if item.get("@type") != "JobPosting":
+                continue
+            title = item.get("title", "")
+            location = item.get("jobLocation", {})
+            if isinstance(location, list):
+                location = location[0] if location else {}
+            address = location.get("address", {})
+            location_str = address.get("addressLocality", "") + ", " + address.get("addressCountry", "")
+            job_url = item.get("url", "")
+            job_id = job_url.split("/")[-1] if job_url else title.replace(" ", "_")
+
+            if is_in_israel(location_str, "google") and is_relevant(title):
+                jobs.append({
+                    "id": f"google_{job_id}",
+                    "title": title,
+                    "company": "Google",
+                    "location": location_str,
+                    "url": job_url,
+                })
 
     return jobs
 
