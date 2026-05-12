@@ -5,6 +5,8 @@ on:
     # 6:00 UTC = 8:00 Israel Standard Time (UTC+2) / 9:00 Israel Daylight Time (UTC+3)
     - cron: "0 6 * * *"
   workflow_dispatch: # allow manual trigger from GitHub UI
+  push:
+    branches: [master]
 
 jobs:
   check-jobs:
