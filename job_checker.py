@@ -1,6 +1,7 @@
 """
 Job alert checker for Shir's job search.
-Scrapes NVIDIA, KLA, Intel, Google, Amazon career pages and emails new relevant postings.
+Scrapes NVIDIA, KLA, Intel, Google, Amazon, Marvell, Qualcomm, HP, Cisco,
+SolarEdge, and Apple career pages and emails new relevant postings.
 """
 
 import json
@@ -42,6 +43,7 @@ EXACT_MATCH = [
     "bi manager",
     "analytics developer",
     "analytics engineer",
+    "planner",
 ]
 
 # Short keywords matched as whole words only (avoids "bi" inside "reliability", etc.)
@@ -51,7 +53,7 @@ WORD_BOUNDARY_TERMS = ["bi", "sql"]
 # Intentionally excludes "data" / "operations" alone (too broad)
 DOMAIN_KEYWORDS = [
     "analytics", "analytical", "planning", "inventory",
-    "logistics", "forecasting", "procurement", "sourcing",
+    "logistics", "forecasting", "forecast", "procurement", "sourcing",
 ]
 
 # Tight role list — no "engineer", "developer", "scientist" (catches too many software/infra roles)
@@ -182,68 +184,21 @@ def fetch_kla_jobs() -> list[dict]:
     return fetch_workday_jobs("kla", "wd1", "Search", "kla")
 
 
-# ---------------------------------------------------------------------------
-# Intel scraper — paginates through all Israel jobs pages
-# ---------------------------------------------------------------------------
+def fetch_marvell_jobs() -> list[dict]:
+    return fetch_workday_jobs("marvell", "wd1", "MarvellCareers", "marvell")
+
+
+
+def fetch_hp_jobs() -> list[dict]:
+    return fetch_workday_jobs("hp", "wd5", "ExternalCareerSite", "hp")
+
+
+def fetch_cisco_jobs() -> list[dict]:
+    return fetch_workday_jobs("cisco", "wd5", "Cisco_Careers", "cisco")
+
 
 def fetch_intel_jobs() -> list[dict]:
-    jobs = []
-    page = 1
-
-    while True:
-        url = f"https://jobs.intel.com/en/search-jobs/{SEARCH_QUERY}/Israel/599/{page}"
-        headers = {
-            **BROWSER_HEADERS,
-            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-        }
-
-        try:
-            resp = requests.get(url, headers=headers, timeout=15)
-            resp.raise_for_status()
-        except Exception as e:
-            print(f"  [intel] page {page} failed: {e}")
-            break
-
-        # Intel embeds job data as JSON in phApp.ddo
-        match = re.search(r'phApp\.ddo\s*=\s*(\{.+?\});\s*(?:phApp|</script>)', resp.text, re.DOTALL)
-        if not match:
-            if page == 1:
-                print("  [intel] Could not parse job data from page")
-            break
-
-        try:
-            data = json.loads(match.group(1))
-            search_data = data.get("eagerLoadRefineSearch", {}).get("data", {})
-            job_list = search_data.get("jobs", [])
-            total = search_data.get("totalJobsCount", 0)
-        except Exception:
-            break
-
-        if not job_list:
-            break
-
-        for job in job_list:
-            title = job.get("title", "")
-            location = f"{job.get('city', '')}, {job.get('country', '')}"
-            job_id = str(job.get("jobId", ""))
-            job_url = f"https://jobs.intel.com/en/detail/job/{job_id}"
-
-            if is_relevant(title):
-                jobs.append({
-                    "id": f"intel_{job_id}",
-                    "title": title,
-                    "company": "Intel",
-                    "location": location,
-                    "url": job_url,
-                })
-
-        jobs_per_page = len(job_list)
-        if page * jobs_per_page >= total:
-            break
-        page += 1
-        time.sleep(0.5)
-
-    return jobs
+    return fetch_workday_jobs("intel", "wd1", "External", "intel")
 
 
 # ---------------------------------------------------------------------------
@@ -372,6 +327,119 @@ def fetch_amazon_jobs() -> list[dict]:
 
 
 # ---------------------------------------------------------------------------
+# Comeet scraper (SolarEdge and any future Israeli companies on Comeet)
+# Public REST API: GET https://www.comeet.co/careers-api/2.0/company/{uid}/positions
+# ---------------------------------------------------------------------------
+
+def fetch_comeet_jobs(company_uid: str, token: str, company_key: str) -> list[dict]:
+    url = f"https://www.comeet.co/careers-api/2.0/company/{company_uid}/positions"
+    try:
+        resp = requests.get(url, params={"token": token, "details": "false"}, timeout=60)
+        resp.raise_for_status()
+        positions = resp.json()
+    except Exception as e:
+        print(f"  [{company_key}] Comeet API failed: {e}")
+        return []
+
+    jobs = []
+    for pos in positions:
+        title = pos.get("name", "")
+        loc = pos.get("location", {})
+        if isinstance(loc, dict):
+            city = loc.get("city", "") or loc.get("name", "")
+            country = loc.get("country", "")
+            location = f"{city}, {country}".strip(", ")
+        else:
+            location = str(loc)
+        job_id = str(pos.get("uid", title))
+        job_url = pos.get("url_active_page", "") or pos.get("url_comeet_hosted_page", "")
+
+        if is_in_israel(location) and is_relevant(title):
+            jobs.append({
+                "id": f"{company_key}_{job_id}",
+                "title": title,
+                "company": company_key.upper(),
+                "location": location,
+                "url": job_url,
+            })
+    return jobs
+
+
+def fetch_solaredge_jobs() -> list[dict]:
+    return fetch_comeet_jobs("71.00A", "17A5E8762BD08DC46E46E46E046E", "solaredge")
+
+
+# ---------------------------------------------------------------------------
+# Apple scraper — jobs embedded as JSON in window.__staticRouterHydrationData
+# 139+ Israel jobs at jobs.apple.com/en-us/search?location=israel-ISR
+# ---------------------------------------------------------------------------
+
+def fetch_apple_jobs() -> list[dict]:
+    jobs = []
+    page = 1
+
+    while True:
+        try:
+            resp = requests.get(
+                "https://jobs.apple.com/en-us/search",
+                params={"location": "israel-ISR", "page": page},
+                headers=BROWSER_HEADERS,
+                timeout=15,
+            )
+            resp.raise_for_status()
+        except Exception as e:
+            print(f"  [apple] page {page} failed: {e}")
+            break
+
+        m = re.search(
+            r'window\.__staticRouterHydrationData\s*=\s*JSON\.parse\("(.+?)"\);\s*</script>',
+            resp.text,
+            re.DOTALL,
+        )
+        if not m:
+            break
+
+        try:
+            raw = m.group(1).encode("utf-8").decode("unicode_escape")
+            data = json.loads(raw)
+            search = data["loaderData"]["search"]
+            results = search.get("searchResults", [])
+            total = search.get("totalRecords", 0)
+        except Exception as e:
+            print(f"  [apple] parse error page {page}: {e}")
+            break
+
+        if not results:
+            break
+
+        for job in results:
+            title = job.get("postingTitle", "")
+            locs = job.get("locations", [])
+            location = ", ".join(
+                filter(None, [locs[0].get("name", ""), locs[0].get("countryName", "")])
+            ) if locs else ""
+            position_id = job.get("positionId", "")
+            job_url = f"https://jobs.apple.com/en-us/details/{position_id}"
+
+            if is_relevant(title):
+                jobs.append({
+                    "id": f"apple_{position_id}",
+                    "title": title,
+                    "company": "Apple",
+                    "location": location,
+                    "url": job_url,
+                })
+
+        page_size = len(results)
+        if page * page_size >= total:
+            break
+        page += 1
+        time.sleep(0.5)
+
+    return jobs
+
+
+# ---------------------------------------------------------------------------
 # Email
 # ---------------------------------------------------------------------------
 
@@ -438,9 +506,14 @@ def main() -> None:
     fetchers = [
         fetch_nvidia_jobs,
         fetch_kla_jobs,
+        fetch_marvell_jobs,
+        fetch_hp_jobs,
+        fetch_cisco_jobs,
         fetch_intel_jobs,
         fetch_google_jobs,
         fetch_amazon_jobs,
+        fetch_solaredge_jobs,
+        fetch_apple_jobs,
     ]
 
     all_found = []
